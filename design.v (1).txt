@@ -1,0 +1,300 @@
+`timescale 1ns/1ps
+
+module riscv_processor (
+    input wire clk,
+    input wire reset,
+    output reg [31:0] pc,
+    output wire [31:0] x1_out,
+    output wire [31:0] x2_out,
+    output wire [31:0] x3_out,
+    output wire [31:0] x4_out,
+    output wire [31:0] x5_out,
+    output wire [31:0] x6_out,
+    output wire [31:0] x7_out,
+    output wire [31:0] x8_out,
+    output wire [31:0] x9_out,
+    output wire [31:0] x10_out
+);
+
+    reg [31:0] registers [0:31];
+    reg [31:0] data_memory [0:63];
+    reg [31:0] instruction;
+
+    reg [31:0] immediate;
+    reg [31:0] alu_result;
+    reg reg_write;
+    reg mem_write;
+    reg mem_to_reg;
+    reg branch_taken;
+
+    integer i;
+
+    wire [6:0] opcode = instruction[6:0];
+    wire [4:0] rd = instruction[11:7];
+    wire [2:0] funct3 = instruction[14:12];
+    wire [4:0] rs1 = instruction[19:15];
+    wire [4:0] rs2 = instruction[24:20];
+    wire [6:0] funct7 = instruction[31:25];
+
+    wire [31:0] reg_data1 =
+        (rs1 == 0) ? 32'b0 : registers[rs1];
+
+    wire [31:0] reg_data2 =
+        (rs2 == 0) ? 32'b0 : registers[rs2];
+
+    assign x1_out = registers[1];
+    assign x2_out = registers[2];
+    assign x3_out = registers[3];
+    assign x4_out = registers[4];
+    assign x5_out = registers[5];
+    assign x6_out = registers[6];
+    assign x7_out = registers[7];
+    assign x8_out = registers[8];
+    assign x9_out = registers[9];
+    assign x10_out = registers[10];
+
+    // Instruction Memory
+    always @(*) begin
+        case (pc)
+            0:  instruction = 32'h00A00093; // ADDI x1,x0,10
+            4:  instruction = 32'h01400113; // ADDI x2,x0,20
+            8:  instruction = 32'h002081B3; // ADD x3,x1,x2
+            12: instruction = 32'h40110233; // SUB x4,x2,x1
+            16: instruction = 32'h0020F2B3; // AND x5,x1,x2
+            20: instruction = 32'h0020E333; // OR x6,x1,x2
+            24: instruction = 32'h00209463; // BNE x1,x2,+8
+            28: instruction = 32'h06300393; // ADDI x7,x0,99
+            32: instruction = 32'h00108463; // BEQ x1,x1,+8
+            36: instruction = 32'h06300413; // ADDI x8,x0,99
+            40: instruction = 32'h00302023; // SW x3,0(x0)
+            44: instruction = 32'h00002483; // LW x9,0(x0)
+            48: instruction = 32'h03200513; // ADDI x10,x0,50
+            default: instruction = 32'h00000013;
+        endcase
+    end
+
+    // Control Unit and ALU
+    always @(*) begin
+        reg_write = 0;
+        mem_write = 0;
+        mem_to_reg = 0;
+        branch_taken = 0;
+        immediate = 0;
+        alu_result = 0;
+
+        case (opcode)
+
+            // R-type: ADD, SUB, AND, OR
+            7'b0110011: begin
+                reg_write = 1;
+
+                case (funct3)
+                    3'b000: begin
+                        if (funct7 == 7'b0100000)
+                            alu_result = reg_data1 - reg_data2;
+                        else
+                            alu_result = reg_data1 + reg_data2;
+                    end
+
+                    3'b111:
+                        alu_result = reg_data1 & reg_data2;
+
+                    3'b110:
+                        alu_result = reg_data1 | reg_data2;
+
+                    default: begin
+                        reg_write = 0;
+                        alu_result = 0;
+                    end
+                endcase
+            end
+
+            // ADDI
+            7'b0010011: begin
+                reg_write = 1;
+
+                immediate = {
+                    {20{instruction[31]}},
+                    instruction[31:20]
+                };
+
+                alu_result = reg_data1 + immediate;
+            end
+
+            // LW
+            7'b0000011: begin
+                if (funct3 == 3'b010) begin
+                    reg_write = 1;
+                    mem_to_reg = 1;
+
+                    immediate = {
+                        {20{instruction[31]}},
+                        instruction[31:20]
+                    };
+
+                    alu_result = reg_data1 + immediate;
+                end
+            end
+
+            // SW
+            7'b0100011: begin
+                if (funct3 == 3'b010) begin
+                    mem_write = 1;
+
+                    immediate = {
+                        {20{instruction[31]}},
+                        instruction[31:25],
+                        instruction[11:7]
+                    };
+
+                    alu_result = reg_data1 + immediate;
+                end
+            end
+
+            // BEQ and BNE
+            7'b1100011: begin
+                immediate = {
+                    {19{instruction[31]}},
+                    instruction[31],
+                    instruction[7],
+                    instruction[30:25],
+                    instruction[11:8],
+                    1'b0
+                };
+
+                case (funct3)
+                    3'b000:
+                        branch_taken =
+                            (reg_data1 == reg_data2);
+
+                    3'b001:
+                        branch_taken =
+                            (reg_data1 != reg_data2);
+
+                    default:
+                        branch_taken = 0;
+                endcase
+            end
+
+            default: begin
+                reg_write = 0;
+            end
+
+        endcase
+    end
+
+    // Processor Sequential Logic
+    always @(posedge clk or posedge reset) begin
+        if (reset) begin
+            pc <= 0;
+
+            for (i = 0; i < 32; i = i + 1)
+                registers[i] <= 0;
+
+            for (i = 0; i < 64; i = i + 1)
+                data_memory[i] <= 0;
+        end
+        else begin
+
+            // Store Word
+            if (mem_write)
+                data_memory[alu_result[7:2]] <= reg_data2;
+
+            // Register Writeback
+            if (reg_write && rd != 0) begin
+                if (mem_to_reg)
+                    registers[rd] <=
+                        data_memory[alu_result[7:2]];
+                else
+                    registers[rd] <= alu_result;
+            end
+
+            registers[0] <= 0;
+
+            // Next PC
+            if (branch_taken)
+                pc <= pc + immediate;
+            else
+                pc <= pc + 4;
+        end
+    end
+
+endmodule
+
+
+// TESTBENCH WITH WAVEFORM GENERATION
+module tb_riscv_processor;
+
+    reg clk;
+    reg reset;
+
+    wire [31:0] pc;
+    wire [31:0] x1_out, x2_out, x3_out;
+    wire [31:0] x4_out, x5_out, x6_out;
+    wire [31:0] x7_out, x8_out, x9_out;
+    wire [31:0] x10_out;
+
+    riscv_processor uut (
+        .clk(clk),
+        .reset(reset),
+        .pc(pc),
+        .x1_out(x1_out),
+        .x2_out(x2_out),
+        .x3_out(x3_out),
+        .x4_out(x4_out),
+        .x5_out(x5_out),
+        .x6_out(x6_out),
+        .x7_out(x7_out),
+        .x8_out(x8_out),
+        .x9_out(x9_out),
+        .x10_out(x10_out)
+    );
+
+    // Clock generation
+    always #5 clk = ~clk;
+
+    // Waveform generation
+    initial begin
+        $dumpfile("dump.vcd");
+        $dumpvars(0, tb_riscv_processor);
+    end
+
+    // Test sequence
+    initial begin
+        clk = 0;
+        reset = 1;
+
+        #12;
+        reset = 0;
+
+        repeat (15) begin
+            @(posedge clk);
+            #1;
+
+            $display(
+                "PC=%0d x1=%0d x2=%0d x3=%0d x4=%0d x5=%0d x6=%0d x9=%0d x10=%0d",
+                pc, x1_out, x2_out, x3_out,
+                x4_out, x5_out, x6_out,
+                x9_out, x10_out
+            );
+        end
+
+        $display("--------------------------------");
+        $display("FINAL REGISTER VALUES");
+        $display("x1  = %0d", x1_out);
+        $display("x2  = %0d", x2_out);
+        $display("x3  = %0d", x3_out);
+        $display("x4  = %0d", x4_out);
+        $display("x5  = %0d", x5_out);
+        $display("x6  = %0d", x6_out);
+        $display("x7  = %0d", x7_out);
+        $display("x8  = %0d", x8_out);
+        $display("x9  = %0d", x9_out);
+        $display("x10 = %0d", x10_out);
+        $display("Memory[0] = %0d", uut.data_memory[0]);
+
+        #10;
+        $finish;
+    end
+
+endmodule
